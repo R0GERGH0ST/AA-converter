@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Android APKs and artifacts
+*.apk
+*.idsig
+*.aab
+*.dex
+
+# External downloaded tools
+tools/*.jar
+tools/
+
+# Temporary directories
+temp/
+build/
+dist/
+*.tmp
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+venv/
+env/
