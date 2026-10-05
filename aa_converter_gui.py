@@ -136,7 +136,7 @@ class AAConverterGUI(ctk.CTk):
         cat_grid.pack(fill="x", padx=12, pady=(0, 12))
 
         for i, (key, desc) in enumerate(VALID_CATEGORIES.items()):
-            var = ctk.BooleanVar(value=(key in ("media", "template")))
+            var = ctk.BooleanVar(value=(key in ("media", "video", "template")))
             self.category_vars[key] = var
 
             cb = ctk.CTkCheckBox(

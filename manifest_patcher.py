@@ -26,7 +26,8 @@ ET.register_namespace("android", ANDROID_NS)
 
 # Valid Android Auto categories
 VALID_CATEGORIES = {
-    "media":        "Media playback (music, podcasts, audiobooks)",
+    "media":        "Media playback (audio, music, podcasts, radio)",
+    "video":        "Video player (YouTube, streaming, local video players)",
     "notification": "Messaging / notification (SMS, chat apps)",
     "template":     "Templated app (Cars App Library)",
     "navigation":   "Navigation / turn-by-turn directions",
@@ -56,7 +57,7 @@ class ManifestPatcher:
     ):
         self.decompiled_dir = decompiled_dir
         self.manifest_path = os.path.join(decompiled_dir, "AndroidManifest.xml")
-        self.categories = categories or ["media", "template"]
+        self.categories = categories or ["media", "video", "template"]
         self.clone_mode = clone_mode
         self.new_package_id = new_package_id
         self.app_name = app_name
@@ -112,18 +113,22 @@ class ManifestPatcher:
         # 5. Add car-related features
         changes["features_added"] = self._add_features(root)
 
-        # 6. Clone / separate package ID if requested
+        # 6. Add video projection & distraction optimization metadata if video category selected
+        if "video" in self.categories:
+            changes["video_support_added"] = self._add_video_metadata(root)
+
+        # 7. Clone / separate package ID if requested
         if self.clone_mode or self.new_package_id:
             old_pkg, new_pkg = self._clone_package(root, self.new_package_id)
             if new_pkg:
                 changes["cloned_package"] = {"original": old_pkg, "cloned": new_pkg}
 
-        # 7. Change app display name if requested
+        # 8. Change app display name if requested
         if self.app_name:
             if self._set_app_name(root, self.app_name):
                 changes["app_name_updated"] = self.app_name
 
-        # 8. Change app icon if requested
+        # 9. Change app icon if requested
         if self.icon_path:
             changes["custom_icon_set"] = self._set_custom_icon(root, self.icon_path)
 
@@ -174,7 +179,10 @@ class ManifestPatcher:
         # Build the XML content
         lines = ['<?xml version="1.0" encoding="utf-8"?>']
         lines.append("<automotiveApp>")
-        for category in self.categories:
+        cats = list(self.categories)
+        if "video" in cats and "media" not in cats:
+            cats.append("media")  # Include media audio session routing for video players
+        for category in cats:
             lines.append(f'    <uses name="{category}" />')
         lines.append("</automotiveApp>")
 
@@ -289,6 +297,13 @@ class ManifestPatcher:
         if "notification" in self.categories:
             permissions_to_add.append("android.permission.READ_CONTACTS")
 
+        # Video permissions
+        if "video" in self.categories:
+            permissions_to_add.append("android.permission.FOREGROUND_SERVICE")
+            permissions_to_add.append("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK")
+            permissions_to_add.append("android.permission.WAKE_LOCK")
+            permissions_to_add.append("android.permission.MEDIA_CONTENT_CONTROL")
+
         # Navigation
         if "navigation" in self.categories:
             permissions_to_add.append("android.permission.ACCESS_FINE_LOCATION")
@@ -322,6 +337,9 @@ class ManifestPatcher:
             ("android.hardware.type.automotive", "false"),
         ]
 
+        if "video" in self.categories:
+            features_to_add.append(("android.software.car.mode", "false"))
+
         if "navigation" in self.categories:
             features_to_add.append(("android.hardware.location.gps", "false"))
 
@@ -342,6 +360,66 @@ class ManifestPatcher:
         if added:
             logger.info("Added features: %s", added)
         return added
+
+    # ------------------------------------------------------------------
+    # Video player projection & distraction optimization configuration
+    # ------------------------------------------------------------------
+    def _add_video_metadata(self, root: ET.Element) -> bool:
+        """
+        Configure video player projection metadata and libraries for Android Auto/Automotive.
+        Injects distractionOptimized and projection categories so video activities can run.
+        """
+        app_elem = root.find("application")
+        if app_elem is None:
+            return False
+
+        meta_name = _android_attr("name")
+        meta_value = _android_attr("value")
+
+        # 1. Add distractionOptimized metadata to application
+        has_distraction = any(m.get(meta_name) == "distractionOptimized" for m in app_elem.findall("meta-data"))
+        if not has_distraction:
+            meta = ET.SubElement(app_elem, "meta-data")
+            meta.set(meta_name, "distractionOptimized")
+            meta.set(meta_value, "true")
+
+        # 2. Add android-automotive-video uses-library (optional/non-blocking)
+        lib_name = _android_attr("name")
+        lib_req = _android_attr("required")
+        has_video_lib = any(lib.get(lib_name) == "android-automotive-video" for lib in app_elem.findall("uses-library"))
+        if not has_video_lib:
+            lib = ET.SubElement(app_elem, "uses-library")
+            lib.set(lib_name, "android-automotive-video")
+            lib.set(lib_req, "false")
+
+        # 3. Add projection categories and distractionOptimized to launcher activities
+        cat_name = _android_attr("name")
+        proj_cats = [
+            "com.google.android.gms.car.category.CATEGORY_PROJECTION",
+            "com.google.android.gms.car.category.CATEGORY_PROJECTION_OEM",
+            "com.google.android.gms.car.category.CATEGORY_PROJECTION_CUSTOM",
+        ]
+
+        for act in app_elem.findall("activity") + app_elem.findall("activity-alias"):
+            # Ensure distractionOptimized on activity
+            if not any(m.get(meta_name) == "distractionOptimized" for m in act.findall("meta-data")):
+                m = ET.SubElement(act, "meta-data")
+                m.set(meta_name, "distractionOptimized")
+                m.set(meta_value, "true")
+
+            # For launcher activities, inject projection categories
+            for ifilter in act.findall("intent-filter"):
+                has_main = any(a.get(cat_name) == "android.intent.action.MAIN" for a in ifilter.findall("action"))
+                has_launcher = any(c.get(cat_name) == "android.intent.category.LAUNCHER" for c in ifilter.findall("category"))
+                if has_main and has_launcher:
+                    existing_cats = {c.get(cat_name) for c in ifilter.findall("category")}
+                    for pcat in proj_cats:
+                        if pcat not in existing_cats:
+                            c_elem = ET.SubElement(ifilter, "category")
+                            c_elem.set(cat_name, pcat)
+
+        logger.info("Configured Android Auto video player projection & distraction optimization metadata.")
+        return True
 
     # ------------------------------------------------------------------
     # 6. Package Cloning (Separate App Installation)

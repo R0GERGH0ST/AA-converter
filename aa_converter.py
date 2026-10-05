@@ -56,7 +56,7 @@ class AAConverter:
             raise FileNotFoundError(f"Input APK not found: {input_apk}")
 
         self.input_apk = os.path.abspath(input_apk)
-        self.categories = categories or ["media", "template"]
+        self.categories = categories or ["media", "video", "template"]
         self.min_sdk = min_sdk
         self.sign = sign
         self.clone = clone
@@ -337,9 +337,9 @@ Valid categories: %(categories)s
     )
     parser.add_argument(
         "--categories", "-c", nargs="+",
-        default=["media", "template"],
+        default=["media", "video", "template"],
         choices=list(VALID_CATEGORIES.keys()),
-        help="Android Auto categories to declare (default: media template)",
+        help="Android Auto categories to declare (default: media video template)",
     )
     parser.add_argument(
         "--min-sdk", type=int, default=None,
