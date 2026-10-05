@@ -56,6 +56,10 @@ class AAConverterGUI(ctk.CTk):
         self.input_path = ctk.StringVar()
         self.output_path = ctk.StringVar()
         self.sign_var = ctk.BooleanVar(value=True)
+        self.clone_var = ctk.BooleanVar(value=False)
+        self.app_name_var = ctk.StringVar()
+        self.package_id_var = ctk.StringVar()
+        self.icon_path_var = ctk.StringVar()
         self.category_vars: dict[str, ctk.BooleanVar] = {}
         self.converting = False
 
@@ -152,6 +156,55 @@ class AAConverterGUI(ctk.CTk):
                 text_color=TEXT_DIM,
             )
             lbl.grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="w", padx=(0, 24), pady=3)
+
+        # ── Clone & Customization card ────────────────────────────────
+        clone_card = self._card(main, "📱  App Cloning & Customization (Dual Install)")
+
+        clone_top = ctk.CTkFrame(clone_card, fg_color="transparent")
+        clone_top.pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkCheckBox(
+            clone_top,
+            text="Clone as separate app (install alongside original without replacing/updating)",
+            variable=self.clone_var,
+            command=self._on_clone_toggle,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            hover_color=ACCENT_LIGHT,
+            border_color=TEXT_DIM,
+        ).pack(anchor="w")
+
+        self.clone_subframe = ctk.CTkFrame(clone_card, fg_color="transparent")
+        self.clone_subframe.pack(fill="x", padx=12, pady=(0, 12))
+
+        # App Name row
+        name_row = ctk.CTkFrame(self.clone_subframe, fg_color="transparent")
+        name_row.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(name_row, text="App Name:", width=105, anchor="w",
+                     font=ctk.CTkFont(size=12)).pack(side="left")
+        ctk.CTkEntry(name_row, textvariable=self.app_name_var,
+                     placeholder_text="e.g. YouTube (Auto) — overrides display title",
+                     height=34).pack(side="left", fill="x", expand=True, padx=8)
+
+        # Package ID row
+        pkg_row = ctk.CTkFrame(self.clone_subframe, fg_color="transparent")
+        pkg_row.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(pkg_row, text="Package ID:", width=105, anchor="w",
+                     font=ctk.CTkFont(size=12)).pack(side="left")
+        ctk.CTkEntry(pkg_row, textvariable=self.package_id_var,
+                     placeholder_text="Auto-generated (<package>.auto) if empty",
+                     height=34).pack(side="left", fill="x", expand=True, padx=8)
+
+        # Custom Icon row
+        icon_row = ctk.CTkFrame(self.clone_subframe, fg_color="transparent")
+        icon_row.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(icon_row, text="Custom Icon:", width=105, anchor="w",
+                     font=ctk.CTkFont(size=12)).pack(side="left")
+        ctk.CTkEntry(icon_row, textvariable=self.icon_path_var,
+                     placeholder_text="Select image file (.png, .jpg, .webp)…",
+                     height=34).pack(side="left", fill="x", expand=True, padx=8)
+        ctk.CTkButton(icon_row, text="Browse", width=80, height=34,
+                      command=self._browse_icon,
+                      fg_color=ACCENT_LIGHT).pack(side="right")
 
         # ── Options card ──────────────────────────────────────────────
         opt_card = self._card(main, "⚙️  Options")
@@ -276,8 +329,28 @@ class AAConverterGUI(ctk.CTk):
         self.after(0, _do)
 
     # ------------------------------------------------------------------
-    # Browse buttons
+    # Browse buttons & Toggles
     # ------------------------------------------------------------------
+    def _on_clone_toggle(self):
+        inp = self.input_path.get().strip()
+        if inp:
+            base, ext = os.path.splitext(inp)
+            suffix = "_clone_aa" if self.clone_var.get() else "_aa"
+            self.output_path.set(f"{base}{suffix}{ext}")
+
+    def _browse_icon(self):
+        path = filedialog.askopenfilename(
+            title="Select Custom App Icon",
+            filetypes=[
+                ("Image Files", "*.png;*.jpg;*.jpeg;*.webp"),
+                ("PNG Images", "*.png"),
+                ("JPEG Images", "*.jpg;*.jpeg"),
+                ("All Files", "*.*"),
+            ],
+        )
+        if path:
+            self.icon_path_var.set(path)
+
     def _browse_input(self):
         path = filedialog.askopenfilename(
             title="Select Input APK",
@@ -286,9 +359,9 @@ class AAConverterGUI(ctk.CTk):
         if path:
             self.input_path.set(path)
             # Auto-set output
-            if not self.output_path.get():
-                base, ext = os.path.splitext(path)
-                self.output_path.set(f"{base}_aa{ext}")
+            base, ext = os.path.splitext(path)
+            suffix = "_clone_aa" if self.clone_var.get() else "_aa"
+            self.output_path.set(f"{base}{suffix}{ext}")
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
@@ -362,6 +435,10 @@ class AAConverterGUI(ctk.CTk):
                     output_apk=out,
                     categories=categories,
                     sign=self.sign_var.get(),
+                    clone=self.clone_var.get(),
+                    package_id=self.package_id_var.get().strip() or None,
+                    app_name=self.app_name_var.get().strip() or None,
+                    icon_path=self.icon_path_var.get().strip() or None,
                     progress_callback=self._set_progress,
                     log_callback=self._append_log,
                 )

@@ -45,10 +45,22 @@ def _android_attr(name: str) -> str:
 class ManifestPatcher:
     """Patches a decoded APK's AndroidManifest.xml for Android Auto support."""
 
-    def __init__(self, decompiled_dir: str, categories: list[str] | None = None):
+    def __init__(
+        self,
+        decompiled_dir: str,
+        categories: list[str] | None = None,
+        clone_mode: bool = False,
+        new_package_id: str | None = None,
+        app_name: str | None = None,
+        icon_path: str | None = None,
+    ):
         self.decompiled_dir = decompiled_dir
         self.manifest_path = os.path.join(decompiled_dir, "AndroidManifest.xml")
         self.categories = categories or ["media", "template"]
+        self.clone_mode = clone_mode
+        self.new_package_id = new_package_id
+        self.app_name = app_name
+        self.icon_path = icon_path
         self._validate_categories()
 
         if not os.path.isfile(self.manifest_path):
@@ -76,6 +88,9 @@ class ManifestPatcher:
             "permissions_added": [],
             "features_added": [],
             "categories": self.categories,
+            "cloned_package": None,
+            "app_name_updated": None,
+            "custom_icon_set": False,
         }
 
         # Parse manifest
@@ -96,6 +111,21 @@ class ManifestPatcher:
 
         # 5. Add car-related features
         changes["features_added"] = self._add_features(root)
+
+        # 6. Clone / separate package ID if requested
+        if self.clone_mode or self.new_package_id:
+            old_pkg, new_pkg = self._clone_package(root, self.new_package_id)
+            if new_pkg:
+                changes["cloned_package"] = {"original": old_pkg, "cloned": new_pkg}
+
+        # 7. Change app display name if requested
+        if self.app_name:
+            if self._set_app_name(root, self.app_name):
+                changes["app_name_updated"] = self.app_name
+
+        # 8. Change app icon if requested
+        if self.icon_path:
+            changes["custom_icon_set"] = self._set_custom_icon(root, self.icon_path)
 
         # Write back the manifest
         self._write_manifest(tree)
@@ -312,6 +342,167 @@ class ManifestPatcher:
         if added:
             logger.info("Added features: %s", added)
         return added
+
+    # ------------------------------------------------------------------
+    # 6. Package Cloning (Separate App Installation)
+    # ------------------------------------------------------------------
+    def _clone_package(self, root: ET.Element, new_pkg: str | None = None) -> tuple[str, str]:
+        """
+        Rename the package ID so Android treats it as an independent app
+        rather than an update to the existing one.
+        """
+        old_pkg = root.get("package", "")
+        if not old_pkg:
+            logger.warning("No package attribute found in manifest root!")
+            return ("", "")
+
+        target_pkg = new_pkg.strip() if new_pkg and new_pkg.strip() else f"{old_pkg}.auto"
+        root.set("package", target_pkg)
+
+        app_elem = root.find("application")
+        if app_elem is not None:
+            # Fully-qualify relative component names so bytecode lookups still work
+            for tag in ("activity", "activity-alias", "service", "receiver", "provider"):
+                for comp in app_elem.findall(tag):
+                    name_attr = _android_attr("name")
+                    val = comp.get(name_attr, "")
+                    if val:
+                        if val.startswith("."):
+                            comp.set(name_attr, f"{old_pkg}{val}")
+                        elif "." not in val:
+                            comp.set(name_attr, f"{old_pkg}.{val}")
+
+            # Rename provider authorities to prevent INSTALL_FAILED_CONFLICTING_PROVIDER
+            auth_attr = _android_attr("authorities")
+            for prov in app_elem.findall("provider"):
+                auth = prov.get(auth_attr)
+                if auth:
+                    new_auth = auth.replace(old_pkg, target_pkg)
+                    prov.set(auth_attr, new_auth)
+
+        # Rename custom permission declarations and usages
+        name_attr = _android_attr("name")
+        for tag in ("permission", "permission-group", "permission-tree", "uses-permission"):
+            for elem in root.findall(tag):
+                pname = elem.get(name_attr, "")
+                if pname.startswith(old_pkg):
+                    elem.set(name_attr, pname.replace(old_pkg, target_pkg, 1))
+
+        # Update apktool.yml if present
+        apktool_yml = os.path.join(self.decompiled_dir, "apktool.yml")
+        if os.path.isfile(apktool_yml):
+            self._patch_apktool_yml_package(apktool_yml, target_pkg)
+
+        logger.info("Cloned package ID from '%s' to '%s'", old_pkg, target_pkg)
+        return (old_pkg, target_pkg)
+
+    @staticmethod
+    def _patch_apktool_yml_package(yml_path: str, new_pkg: str):
+        """Set renameManifestPackage in apktool.yml."""
+        try:
+            with open(yml_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            if "renameManifestPackage:" in content:
+                content = re.sub(
+                    r"renameManifestPackage:\s*.*",
+                    f"renameManifestPackage: '{new_pkg}'",
+                    content,
+                )
+            elif "packageInfo:" in content:
+                content = content.replace(
+                    "packageInfo:",
+                    f"packageInfo:\n  renameManifestPackage: '{new_pkg}'",
+                )
+            else:
+                content += f"\npackageInfo:\n  renameManifestPackage: '{new_pkg}'\n"
+
+            with open(yml_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("Updated apktool.yml renameManifestPackage to %s", new_pkg)
+        except Exception as exc:
+            logger.warning("Could not patch apktool.yml package: %s", exc)
+
+    # ------------------------------------------------------------------
+    # 7. App Display Name Customization
+    # ------------------------------------------------------------------
+    def _set_app_name(self, root: ET.Element, app_name: str) -> bool:
+        """Set a custom application display label."""
+        if not app_name or not app_name.strip():
+            return False
+
+        app_name = app_name.strip()
+        app_elem = root.find("application")
+        if app_elem is None:
+            return False
+
+        label_attr = _android_attr("label")
+        app_elem.set(label_attr, app_name)
+
+        # Also update launcher activity label if present
+        for act in app_elem.findall("activity") + app_elem.findall("activity-alias"):
+            for ifilter in act.findall("intent-filter"):
+                has_main = any(a.get(_android_attr("name")) == "android.intent.action.MAIN" for a in ifilter.findall("action"))
+                has_launcher = any(c.get(_android_attr("name")) == "android.intent.category.LAUNCHER" for c in ifilter.findall("category"))
+                if has_main and has_launcher:
+                    act.set(label_attr, app_name)
+
+        logger.info("Updated app label to: %s", app_name)
+        return True
+
+    # ------------------------------------------------------------------
+    # 8. App Icon Customization
+    # ------------------------------------------------------------------
+    def _set_custom_icon(self, root: ET.Element, icon_path: str) -> bool:
+        """Inject custom app icon across multiple screen densities."""
+        if not icon_path or not os.path.isfile(icon_path):
+            logger.warning("Custom icon path does not exist: %s", icon_path)
+            return False
+
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.warning("Pillow library not installed; skipping custom icon injection.")
+            return False
+
+        try:
+            img = Image.open(icon_path).convert("RGBA")
+        except Exception as exc:
+            logger.error("Failed to read image %s: %s", icon_path, exc)
+            return False
+
+        densities = {
+            "drawable-mdpi": (48, 48),
+            "drawable-hdpi": (72, 72),
+            "drawable-xhdpi": (96, 96),
+            "drawable-xxhdpi": (144, 144),
+            "drawable-xxxhdpi": (192, 192),
+            "drawable": (192, 192),
+        }
+
+        icon_res_name = "aa_custom_icon"
+        for folder, size in densities.items():
+            dir_path = os.path.join(self.decompiled_dir, "res", folder)
+            os.makedirs(dir_path, exist_ok=True)
+            out_file = os.path.join(dir_path, f"{icon_res_name}.png")
+            resized = img.resize(size, Image.Resampling.LANCZOS)
+            resized.save(out_file, "PNG")
+
+        # Update AndroidManifest.xml application icon
+        app_elem = root.find("application")
+        if app_elem is not None:
+            app_elem.set(_android_attr("icon"), f"@drawable/{icon_res_name}")
+            app_elem.set(_android_attr("roundIcon"), f"@drawable/{icon_res_name}")
+
+            # Also update launcher activity icon if explicitly declared
+            for act in app_elem.findall("activity") + app_elem.findall("activity-alias"):
+                if _android_attr("icon") in act.attrib:
+                    act.set(_android_attr("icon"), f"@drawable/{icon_res_name}")
+                if _android_attr("roundIcon") in act.attrib:
+                    act.set(_android_attr("roundIcon"), f"@drawable/{icon_res_name}")
+
+        logger.info("Successfully injected custom app icon from %s", icon_path)
+        return True
 
     # ------------------------------------------------------------------
     # Write manifest back

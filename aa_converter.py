@@ -38,6 +38,10 @@ class AAConverter:
         categories: list[str] | None = None,
         min_sdk: int | None = None,
         sign: bool = True,
+        clone: bool = False,
+        package_id: str | None = None,
+        app_name: str | None = None,
+        icon_path: str | None = None,
         keystore: str | None = None,
         ks_pass: str = "android",
         key_alias: str = "androiddebugkey",
@@ -55,6 +59,10 @@ class AAConverter:
         self.categories = categories or ["media", "template"]
         self.min_sdk = min_sdk
         self.sign = sign
+        self.clone = clone
+        self.package_id = package_id
+        self.app_name = app_name
+        self.icon_path = icon_path
         self.keystore = keystore
         self.ks_pass = ks_pass
         self.key_alias = key_alias
@@ -67,7 +75,8 @@ class AAConverter:
             self.output_apk = os.path.abspath(output_apk)
         else:
             base, ext = os.path.splitext(self.input_apk)
-            self.output_apk = f"{base}_aa{ext}"
+            suffix = "_clone_aa" if clone else "_aa"
+            self.output_apk = f"{base}{suffix}{ext}"
 
         # Tool manager
         self.tool_mgr = ToolManager(tools_dir)
@@ -138,7 +147,14 @@ class AAConverter:
             # Step 2: Patch manifest
             self._progress(0.4, "Patching manifest…")
             self._log("Patching AndroidManifest.xml…")
-            patcher = ManifestPatcher(self.decompiled_dir, self.categories)
+            patcher = ManifestPatcher(
+                self.decompiled_dir,
+                categories=self.categories,
+                clone_mode=self.clone,
+                new_package_id=self.package_id,
+                app_name=self.app_name,
+                icon_path=self.icon_path,
+            )
             patch_result = patcher.patch(self.min_sdk)
             result["patch_details"] = patch_result
             result["steps"].append("patched")
@@ -350,6 +366,22 @@ Valid categories: %(categories)s
         help="Key password (default: android)",
     )
     parser.add_argument(
+        "--clone", action="store_true",
+        help="Clone APK as an independent app to install alongside original without replacing it",
+    )
+    parser.add_argument(
+        "--package-id", default=None,
+        help="Custom package ID / Application ID for cloned app (default: <package>.auto)",
+    )
+    parser.add_argument(
+        "--app-name", default=None,
+        help="Custom app display name (launcher title)",
+    )
+    parser.add_argument(
+        "--icon", default=None,
+        help="Path to custom app icon image (.png, .jpg, .webp)",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable verbose logging",
     )
@@ -391,6 +423,10 @@ def cli_main():
         categories=args.categories,
         min_sdk=args.min_sdk,
         sign=not args.no_sign,
+        clone=args.clone,
+        package_id=args.package_id,
+        app_name=args.app_name,
+        icon_path=args.icon,
         keystore=args.keystore,
         ks_pass=args.ks_pass,
         key_alias=args.key_alias,
@@ -403,6 +439,11 @@ def cli_main():
     print(f"  Output:     {converter.output_apk}")
     print(f"  Categories: {', '.join(converter.categories)}")
     print(f"  Signing:    {'Yes' if not args.no_sign else 'No'}")
+    print(f"  Clone Mode: {'Yes' if args.clone else 'No'}")
+    if args.app_name:
+        print(f"  App Name:   {args.app_name}")
+    if args.icon:
+        print(f"  Custom Icon:{args.icon}")
     print()
 
     result = converter.convert()

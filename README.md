@@ -5,6 +5,9 @@ A powerful tool to patch any Android APK to declare Android Auto support. It dec
 ## Features
 
 - **One-click conversion** — Drop an APK, pick your Auto categories, and go
+- **Dual Install / Clone Mode** — Install alongside original app as a standalone application without asking to update or replace
+- **App Name Customizer** — Easily rename the launcher title (e.g. "YouTube (Auto)")
+- **App Icon Customizer** — Replace app icons with high-resolution custom images across all densities
 - **Multiple Android Auto categories** — Media, Messaging, Navigation, POI, IoT, Parking, Charging, Template
 - **Modern GUI** — Beautiful dark-mode interface built with CustomTkinter
 - **CLI mode** — Scriptable for CI/CD and batch processing
@@ -43,6 +46,10 @@ Options:
   --categories, -c  Space-separated Auto categories (default: media template)
                     Choices: media, notification, template, navigation, poi,
                              iot, parking, charging
+  --clone           Clone APK to install as a standalone app alongside original
+  --package-id      Custom package ID for cloned app (default: <package>.auto)
+  --app-name        Custom display title / launcher name
+  --icon            Path to custom app icon (.png, .jpg, .webp)
   --min-sdk         Override minimum SDK version (default: keep original)
   --no-sign         Skip signing the output APK
   --keystore        Path to custom keystore for signing
@@ -58,11 +65,14 @@ Options:
 # Convert with media + notification support
 python aa_converter.py -i myapp.apk -c media notification
 
+# Clone as separate app so it won't ask to update existing app
+python aa_converter.py -i myapp.apk --clone --app-name "MyApp Auto"
+
+# Full custom package with icon and name
+python aa_converter.py -i myapp.apk --clone --app-name "My Music" --icon custom_icon.png
+
 # Navigation app conversion
 python aa_converter.py -i maps.apk -c navigation template -o maps_auto.apk
-
-# Using a custom keystore
-python aa_converter.py -i app.apk --keystore release.jks --ks-pass mypass
 ```
 
 ## How It Works
